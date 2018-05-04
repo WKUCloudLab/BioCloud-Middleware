@@ -1,11 +1,15 @@
 const ipc=require('node-ipc');
 const fs=('fs');
 const loadjson = require('load-json-file');
+const { spawn } = require('child_process');
 const demodirectory = "/data/demoDir";
+const out = fs.openSync('./out.log', 'a');
+const err = fs.openSync('./err.log', 'a');
 
-const waitqueue = []
-const readyqueue = []
-const inprocessqueue = []
+const waitqueue = [];
+const readyqueue = [];
+const inprocessqueue = [];
+const childprocesses = {};
 /***************************************\
  *
  * You should start both hello and world
@@ -15,6 +19,7 @@ const inprocessqueue = []
 
 ipc.config.id = 'world';
 ipc.config.retry= 1500;
+
 
 ipc.serve(
     function(){
@@ -36,6 +41,10 @@ ipc.serve(
         );
     }
 );
+
+
+ipc.server.start();
+console.log('listening');
 
 function waitEnqueue(id){
     return new Promise((resolve, reject) =>{
@@ -154,6 +163,7 @@ function pushToReady(){
 
 
 setInterval(pushToReady, 10000);
+
 function pushToInprocess(){
     if(inprocessqueue.length < 5){
         var num = 5 - inprocessqueue.length;
@@ -184,33 +194,39 @@ function pushToInprocess(){
                         throw err;
                     }
                     console.log("Successfully updated status of job" + result+ " to INPROCESS");
-            })
+            })expected
         }
     }
 }
 
 async function submitK8s(id){
     //build json template here
-    buildJson().then((result)=> { 
-        var submittedJob = await spawn("kubectl",  ["create","-f","./template.json"], {  detached: true, stdio: [ 'ignore', , err ] });
+    buildJson(id).then((id)=> { 
+        var submittedJob = await spawn("kubectl",  ["create","-f","./template.json"], {  detached: true, stdio: [ 'ignore', out, err ] });
         //need to start parsing for when job completes here
-        handleJobCompletion(submittedJob);
+        handleJobCompletion(id);
 
-    });
-    
-
+    });   
 }
 //add the submitted job's stdout to an array to regular be searched over and a setinterval function will look to see when job completes then call finalize function that reports job as complete
 // it will also update any next_jobs that are depending on it in the database and store the results in the appropriate location  
-function handleJobCompletion(submittedJob){
+async function handleJobCompletion(id){
     while(inprocessqueue.length > 0){
         //check constantly for currently running job
         //once done, call complete job function;
+        for(i in inprocessqueue){
+            if(!childprocesses[inprocessqueue[i]])
+            {
+                var search = spawn("kubectl", ["logs", "-l", "name=", inprocessqueue[i]],stdio[ 0, 'pipe', err]);
+                childprocesses[inprocessqueue[i]] = search;
+            }
+
+        }        
     }
 }
 
 async buildJson(id){
-    
+    return new Promise((resolve, reject) => {
     var mysql = require('mysql');
     var connection = mysql.createConnection({
         host     : '192.168.1.100',
@@ -221,7 +237,10 @@ async buildJson(id){
     });
     
     connection.connect(function(err) {
-        if (err) throw err;
+        if (err){ 
+            throw err;
+            reject(err);
+        }
         console.log("Connected!");
     });
 
@@ -229,6 +248,7 @@ async buildJson(id){
     connection.query(sql, function (err, result) {
         if(err) {
             throw err;
+            reject(err);
             console.log("error querying database");
         }
         console.log("successful query!");
@@ -261,6 +281,9 @@ async buildJson(id){
 
         }
     });
+    resolve(id);
+
+ });
 }
 
 async writeToScript(command){
@@ -280,6 +303,3 @@ async writeToScript(command){
     });
     //update jobs table here to change status to in progress 
 }
-
-ipc.server.start();
-console.log('listening');
