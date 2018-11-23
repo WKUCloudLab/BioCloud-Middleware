@@ -265,7 +265,7 @@ async function pushToInProcess(){
                     
                 });
 
-                var sql = "UPDATE Jobs SET jobs.status = 'INPROCESS' WHERE Jobs.id = ?";
+                var sql = "UPDATE Jobs SET Jobs.status = 'INPROCESS' WHERE Jobs.id = ?";
                 connection.query(sql, [removeready],  function (err, result) {
                     if(err){
                         console.log("Unable to update job status to INPROCESS");
@@ -501,8 +501,8 @@ async function buildJson(id){
             console.log("line 426" + JSON.stringify(result[0]));
             //this might be a string idk, we need it to be json
             var command = result[0].options;
-            var script = result[0].scriptId.toLowerCase();
-            var scriptName = result[0].name;
+            var scriptName = result[0].scriptId.toLowerCase();
+            //var scriptName = result[0].name;
             //for some reason name is the id and not jobs.id?
             var jobId = (Number.isNaN(result[0].id) ? parseInt(result[0].id) :  result[0].id);
             var userdirectory = "/"+result[0].userId;
