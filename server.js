@@ -4,7 +4,7 @@ const stdio = require('stdio');
 const loadjson = require('load-json-file');
 const jsonfile = require('jsonfile');
 const { spawn } = require('child_process');
-const demodirectory = "/data/demoDir";
+//const demodirectory = "/data/demoDir";
 
 const out = fs.open('./out.log', 'a', () => {console.log("opened out.log")});
 const err = fs.open('./err.log', 'a', () => {console.log("opened err.log")});
@@ -57,15 +57,14 @@ function waitEnqueue(id){
     return new Promise((resolve, reject) =>{
         console.log("wait enqueue");
         originalLength = waitqueue.length;
-        newLength = waitqueue.push(id);
+        newLength = waitqueue.unshift(id);
         if(newLength <= originalLength){
             reject(new Error("Can't add to wait queue"))
         }else{
-            resolve(waitqueue[newLength - 1]);
 
         var mysql = require('mysql');
         var connection = mysql.createConnection({
-            host     : '192.168.1.100',
+            host     : 'localhost',
             port     : '6603',
             user     : process.env.DB_USER2,
             password : process.env.DB_PASS2,
@@ -87,17 +86,18 @@ function waitEnqueue(id){
 
         });
             
-        
+        connection.end();
         resolve(waitqueue[newLength - 1]);
     });
 }
-function waitSplice(i){
+function waitDequeue(i){
     return new Promise((resolve, reject) => {
         if(waitqueue.length == 0){
+	    reject("cannot dequeue an empty queue");
             return;
         }
        var originalLength = waitqueue.length;
-       var value =  waitqueue.splice(i, 1);
+       var value =  waitqueue.pop();
        var newLength = waitqueue.length;
        if(newLength >= originalLength){
         console.log("Value " + value);
@@ -114,7 +114,7 @@ function readyEnqueue(id){
     console.log("Adding to ready queue.");
     return new Promise((resolve, reject) =>{
         var originalLength = readyqueue.length;
-        var newLength = readyqueue.push(id);
+        var newLength = readyqueue.unshift(id);
         if(newLength <= originalLength){
             reject(new Error("Can't add to ready queue"));
         }else{
@@ -127,7 +127,7 @@ function readyEnqueue(id){
 function inprocessEnqueue(id){
     return new Promise((resolve, reject) =>{
         var originalLength = inprocessqueue.length;
-        var newLength = inprocessqueue.push(id);
+        var newLength = inprocessqueue.unshift(id);
         if(newLength <= originalLength){
             console.log("adding to inprocess queue failed");
             reject(new Error("Can't add to inprocess queue"))
@@ -174,7 +174,7 @@ function pushToReady(){
     if(waitqueue.length > 0){
         var mysql = require('mysql');
         var connection = mysql.createConnection({
-            host     : '192.168.1.100',
+            host     : 'localhost',
             port: '6603',
             user     : process.env.DB_USER2,
             password : process.env.DB_PASS2,
@@ -213,14 +213,38 @@ function pushToReady(){
                             console.log("error in accessing files");
                             throw err; 
                         }
+                	console.log("Waitqueue[i] " + waitqueue[i]);
+                	readyEnqueue(waitqueue[i]);
+                	waitDequeue(i);
 
                     });
 
                 }
-                console.log("Waitqueue[i] " + waitqueue[i]);
-                readyEnqueue(waitqueue[i]);
-                waitSplice(i);
-            });   
+		// perform filesystem check here for user files if not present in database
+		if(result.length == 0){
+			let sql = "SELECT Options, Users.username FROM Jobs, Users WHERE Jobs.id=? AND Jobs.userId = Users.id;";
+			connection.query(sql, [waitqueue[i]], function(err, result){
+				if(err){
+					throw err;
+				}
+				for(let option of result){
+					let args = option.options.split(" ");
+					let path = "/data/users/"+option.username+"/"+args[1]
+					fs.access(path, fs.constants.F_OK | fs.constants.R_OK, (err)=>{
+						if(err){
+							console.error("file does not exist");
+							return;
+						}
+						console.log("Waitqueue[i] " + waitqueue[i]);
+						readyEnqueue(waitqueue[i]);
+						waitDequeue(i)
+						
+					});
+			
+				}
+			});		
+		}
+            });
         }
     }
 }
@@ -244,12 +268,13 @@ async function pushToInProcess(){
 
                 console.log("line 213");
                 console.log(removeready);
+		//these following 2 functions maybe asynchronous operations therefore we may be able to use await here, possibly even Promise.All() since they seem to be independent
                 submitK8s(removeready);
-				inprocessEnqueue(removeready);
+		inprocessEnqueue(removeready);
 			   
                 var mysql = require('mysql');
                 var connection = mysql.createConnection({
-                    host     : '192.168.1.100',
+                    host     : 'localhost',
                     port: '6603',
                     user     : process.env.DB_USER2,
                     password : process.env.DB_PASS2,
@@ -289,7 +314,7 @@ async function submitK8s(id){
     id = await buildJson(id) 
     console.log("line 258");
     try{
-    var submittedJob = spawn("kubectl",  ["create","-f","./template.json"], { stdio: [ 'ignore', out, err ] });
+    var submittedJob = spawn("kubectl",  ["create","-f","./instance.json"], { stdio: [ 'ignore', out, err ] });
     childprocesses[id] = submittedJob;
     submittedJob.on('error', (err)=> {
         console.log("failed to spawn process");
@@ -460,7 +485,7 @@ async function buildJson(id){
         console.log("building json");
     var mysql = require('mysql');
     var connection = mysql.createConnection({
-        host     : '192.168.1.100',
+        host     : 'localhost',
         port: '6603',
         user     : process.env.DB_USER2,
         password : process.env.DB_PASS2,
@@ -477,12 +502,13 @@ async function buildJson(id){
 
 	console.log("What the heck is Id? "+id);
 
-    var sql = "SELECT Jobs.id, Jobs.name, Jobs.status, Jobs.scriptId, Jobs.userId, Jobs.options FROM Jobs WHERE Jobs.id = ?";
+    var sql = "SELECT Jobs.id, Jobs.status, Jobs.scriptId, Users.username, Jobs.options FROM Jobs, Users WHERE Jobs.id = ? AND Jobs.userId = Users.id";
     connection.query(sql, [id], async function (err, result) {
         if(err) {
             console.log("error querying database");
             throw err;
             reject(err);
+	    return;
             
         }
         console.log("successfully queried jobs & users!");
@@ -506,7 +532,7 @@ async function buildJson(id){
             //for some reason name is the id and not jobs.id?
             var jobId = (Number.isNaN(result[0].id) ? parseInt(result[0].id) :  result[0].id);
             var userdirectory = "/"+result[0].userId;
-            let kube_command = `${demodirectory}/test.sh`;    
+            let kube_command = `/data/test.sh`;    
             
             console.log(doc);
             doc.metadata.name = jobId;
@@ -539,11 +565,11 @@ async function writeToScript(command){
         
     // }
     let args = command.split(" "); 
-    arglist+=`${args[0]} ${demodirectory}/${args[1]}\n`;
-    arglist+=`ls ${demodirectory}\n`;
+    arglist+=`${args[0]} ${args[1]}\n`;
+    arglist+=`ls /data\n`;
     arglist+=`echo "Successful Execution"\n`;
 
-    fs.writeFile(`${demodirectory}/tesh.sh`, arglist, (err)=>{
+    fs.writeFile(`/data/tesh.sh`, arglist, (err)=>{
         if(err) throw err;
         console.log(err);
     })
